@@ -1,0 +1,571 @@
+---
+title: "DMUBA TP01"
+output: html_notebook
+---
+
+Carga inicial del dataframe de tweets COVID-19
+```{r}
+library(mongolite)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+library(tm, exclude = "inspect")
+library(stringr)
+library(stringi)
+library(arules)
+library(tokenizers)
+
+
+tweets_mongo_covid19 <- mongo(
+  collection = "tweets_mongo_covid19", 
+  db = "DMUBA"
+)
+```
+
+# Análisis de Perfiles
+## Desplegamos todos los perfiles
+```{r}
+profiles = tweets_mongo_covid19$find(fields=
+'{
+      "user_id": 1,
+      "screen_name": 1,
+      "verified": 1,
+      "location": 1,
+      "source": 1,
+      "favorite_count": 1,
+      "retweet_count": 1,
+      "statuses_count": 1,
+      "followers_count": 1,
+      "friends_count": 1,
+        
+      "retweet_user_id": 1,
+      "retweet_screen_name": 1,
+      "retweet_verified": 1,
+      "retweet_location": 1,
+      "retweet_source": 1,
+      "retweet_favorite_count": 1,
+      "retweet_retweet_count": 1,
+      "retweet_statuses_count": 1,
+      "retweet_followers_count": 1,
+      "retweet_friends_count": 1,
+      
+      "quoted_user_id": 1,
+      "quoted_screen_name": 1,
+      "quoted_verified": 1,
+      "quoted_location": 1,
+      "quoted_source": 1,
+      "quoted_favorite_count": 1,
+      "quoted_retweet_count": 1,
+      "quoted_statuses_count": 1,
+      "quoted_followers_count": 1,
+      "quoted_friends_count": 1
+}'
+)
+```
+
+## Combinamos los perfiles de los tweets originales, retweets y quotes involucrados
+```{r}
+original_profiles_header <- c(
+  'user_id',
+  'screen_name',
+  'verified',
+  'location',
+  'source',
+  'favorite_count',
+  'retweet_count',
+  'statuses_count',
+  'followers_count',
+  'friends_count'
+)
+original_profiles = profiles[,original_profiles_header]
+```
+
+```{r}
+retweeted_profiles_header <- c(
+  'retweet_user_id',
+  'retweet_screen_name',
+  'retweet_verified',
+  'retweet_location',
+  'retweet_source',
+  'retweet_favorite_count',
+  'retweet_retweet_count',
+  'retweet_statuses_count',
+  'retweet_followers_count',
+  'retweet_friends_count'
+)
+
+retweeted_profiles = profiles[,retweeted_profiles_header]
+
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_user_id'] <- 'user_id'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_screen_name'] <- 'screen_name'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_verified'] <- 'verified'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_location'] <- 'location'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_source'] <- 'source'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_favorite_count'] <- 'favorite_count'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_retweet_count'] <- 'retweet_count'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_statuses_count'] <- 'statuses_count'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_followers_count'] <- 'followers_count'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_friends_count'] <- 'friends_count'
+```
+
+```{r}
+quoted_profiles_headers <- c(
+  'quoted_user_id',
+  'quoted_screen_name',
+  'quoted_verified',
+  'quoted_location',
+  'quoted_source',
+  'quoted_favorite_count',
+  'quoted_retweet_count',
+  'quoted_statuses_count',
+  'quoted_followers_count',
+  'quoted_friends_count'
+)
+quoted_profiles = profiles[,quoted_profiles_headers]
+
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_user_id'] <- 'user_id'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_screen_name'] <- 'screen_name'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_verified'] <- 'verified'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_location'] <- 'location'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_source'] <- 'source'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_favorite_count'] <- 'favorite_count'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_retweet_count'] <- 'retweet_count'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_statuses_count'] <- 'statuses_count'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_followers_count'] <- 'followers_count'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_friends_count'] <- 'friends_count'
+```
+
+## Combinamos y aplicamos transformaciones
+```{r}
+combined_profiles = rbind(original_profiles, retweeted_profiles, quoted_profiles)
+
+# Si buscamos duplicados en todas las columnas hay variaciones de followers entre usuarios
+#tweet_profiles_df = combined_profiles[!duplicated(combined_profiles),]
+
+tweet_profiles_df = combined_profiles[!duplicated(combined_profiles[,"user_id"]),]
+
+summary(tweet_profiles_df)
+```
+
+
+# 3) Usuarios con mayor repercusión (retweet_count)
+```{r}
+top_users_by_retweet_count=combined_profiles
+
+#Ordenamos por retweet_count de manera decreciente, hay mismos tw con distinto retweet_count
+top_users_by_retweet_count= top_users_by_retweet_count %>%
+  group_by(user_id) %>%
+  arrange(-retweet_count) %>%
+  filter(row_number()==1)
+
+View(
+  head(top_users_by_retweet_count)
+)
+```
+
+```{r}
+# Se discretizan variables num�ricas
+
+top_users_by_retweet_count$cat_friends =discretize(top_users_by_retweet_count$friends_count, labels=c("pocos", "medio", "muchos"))
+top_users_by_retweet_count$cat_favorite =discretize(log10(top_users_by_retweet_count$favorite_count+1),method = "fixed", breaks = c(-Inf, 0.0001, 1.5, 2, Inf), labels=c("nada","pocos", "medio", "muchos"))
+top_users_by_retweet_count$cat_rt =discretize(log10(top_users_by_retweet_count$retweet_count+1),method = "fixed", breaks = c(-Inf, 0.0001, 1.5, 2, Inf), labels=c("nada","pocos", "medio", "muchos"))
+top_users_by_retweet_count$cat_statuses =discretize(top_users_by_retweet_count$statuses_count, labels=c("pocos", "medio", "muchos"))
+top_users_by_retweet_count$cat_followers =discretize(top_users_by_retweet_count$followers_count, labels=c("pocos", "medio", "muchos"))
+top_users_by_retweet_count$cat_verified =  as.factor(ifelse(top_users_by_retweet_count$verified, "si", NA))
+View(top_users_by_retweet_count)
+```
+
+
+```{r}
+# generaci�n de reglas: Aquellos con muchos RT
+trans <- as(top_users_by_retweet_count[c("cat_friends", "cat_favorite","cat_verified","cat_statuses","cat_followers", "cat_rt")], "transactions")
+rules = apriori(trans, parameter=list(target="rule", support=0.01, confidence=0.02), appearance = list(rhs = 'cat_rt=muchos'))
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE))
+```
+
+```{r}
+# generaci�n de reglas: Aquellos con muchos Favs
+trans <- as(top_users_by_retweet_count[c("cat_friends", "cat_favorite","cat_verified","cat_statuses","cat_followers", "cat_rt")], "transactions")
+rules = apriori(trans, parameter=list(target="rule", support=0.01, confidence=0.02), appearance = list(rhs = 'cat_favorite=muchos'))
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE))
+```
+
+#4 Consigna, pregunta del TP pasado, independencia verified vs popularidad
+```{r}
+# generaci�n de reglas 2- Influencia del verified
+trans <- as(top_users_by_retweet_count[c("cat_friends", "cat_favorite","cat_verified","cat_statuses","cat_followers", "cat_rt")], "transactions")
+rules = apriori(trans, parameter=list(target="rule", support=0.0001, confidence=0.02), appearance = list(lhs = 'cat_verified=si'))
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE))
+```
+
+
+# De ac� para abajo an�lisis de profiles TP1
+
+
+Respecto a los replies, solo 38 casos de 1487 cuentan con 1 o más RT
+Respecto a los quotes, sólo contamos con el número de Quotes de aquellos que son TW, todos los registros se encuentran en 0.
+
+## Sources Analysis
+```{r}
+sources = as.data.frame(
+  table(
+    tweet_profiles_df[
+      !is.na(tweet_profiles_df[,"source"]),
+      "source"]
+    )
+)
+
+names(sources)[1] = "source"
+names(sources)[2] = "count"
+
+sources = sources[
+  order(
+    sources["count"], 
+    decreasing = TRUE
+  ),
+]
+
+View(sources)
+```
+
+## Location Analysis
+```{r}
+locations = as.data.frame(
+  table(
+    tweet_profiles_df[
+      !is.na(tweet_profiles_df[,"location"]),
+      "location"]
+    )
+)
+
+names(locations)[1] = "location"
+names(locations)[2] = "count"
+
+locations = locations[
+  order(
+    locations["count"], 
+    decreasing = TRUE
+  ),
+]
+
+View(locations)
+```
+
+
+## Tweets de mayor impacto
+```{r}
+df_tweets = tweets_mongo_covid19$find(fields=
+'{
+      "status_id": 1,
+      "user_id": 1,
+      "screen_name": 1,
+      "verified": 1,
+      "location": 1,
+      "source": 1,
+      "favorite_count": 1,
+      "retweet_count": 1,
+      "statuses_count": 1,
+      "followers_count": 1,
+      "friends_count": 1,
+        
+      "retweet_status_id": 1,  
+      "retweet_user_id": 1,
+      "retweet_screen_name": 1,
+      "retweet_verified": 1,
+      "retweet_location": 1,
+      "retweet_source": 1,
+      "retweet_favorite_count": 1,
+      "retweet_retweet_count": 1,
+      "retweet_statuses_count": 1,
+      "retweet_followers_count": 1,
+      "retweet_friends_count": 1,
+      
+      "quoted_status_id": 1,  
+      "quoted_user_id": 1,
+      "quoted_screen_name": 1,
+      "quoted_verified": 1,
+      "quoted_location": 1,
+      "quoted_source": 1,
+      "quoted_favorite_count": 1,
+      "quoted_retweet_count": 1,
+      "quoted_statuses_count": 1,
+      "quoted_followers_count": 1,
+      "quoted_friends_count": 1
+}'
+)
+```
+
+```{r}
+View(df_tweets)
+```
+
+# Combinamos Tweets
+```{r}
+original_tweets_header <- c(
+  'status_id',
+  'user_id',
+  'screen_name',
+  'verified',
+  'location',
+  'source',
+  'favorite_count',
+  'retweet_count',
+  'statuses_count',
+  'followers_count',
+  'friends_count'
+)
+original_tweets = df_tweets[,original_tweets_header]
+
+```
+
+```{r}
+retweeted_tweets_header <- c(
+  'retweet_status_id',
+  'retweet_user_id',
+  'retweet_screen_name',
+  'retweet_verified',
+  'retweet_location',
+  'retweet_source',
+  'retweet_favorite_count',
+  'retweet_retweet_count',
+  'retweet_statuses_count',
+  'retweet_followers_count',
+  'retweet_friends_count'
+)
+
+retweeted_tweets = df_tweets[,retweeted_tweets_header]
+
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_status_id'] <- 'status_id'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_user_id'] <- 'user_id'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_screen_name'] <- 'screen_name'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_verified'] <- 'verified'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_location'] <- 'location'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_source'] <- 'source'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_favorite_count'] <- 'favorite_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_retweet_count'] <- 'retweet_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_statuses_count'] <- 'statuses_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_followers_count'] <- 'followers_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_friends_count'] <- 'friends_count'
+
+```
+
+```{r}
+quoted_tweets_header <- c(
+  'quoted_status_id',
+  'quoted_user_id',
+  'quoted_screen_name',
+  'quoted_verified',
+  'quoted_location',
+  'quoted_source',
+  'quoted_favorite_count',
+  'quoted_retweet_count',
+  'quoted_statuses_count',
+  'quoted_followers_count',
+  'quoted_friends_count'
+)
+
+quoted_tweets = df_tweets[,quoted_tweets_header]
+
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_status_id'] <- 'status_id'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_user_id'] <- 'user_id'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_screen_name'] <- 'screen_name'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_verified'] <- 'verified'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_location'] <- 'location'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_source'] <- 'source'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_favorite_count'] <- 'favorite_count'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_retweet_count'] <- 'retweet_count'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_statuses_count'] <- 'statuses_count'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_followers_count'] <- 'followers_count'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_friends_count'] <- 'friends_count'
+
+```
+
+
+#4)Tweets con mayor repercusión
+```{r}
+combined_tweets = rbind(original_tweets, retweeted_tweets, quoted_tweets)
+View(combined_tweets)
+top_tweets_by_retweet_count=combined_tweets
+#Ordenamos por retweet_count de manera decreciente, hay mismos tw con distinto retweet_count
+top_tweets_by_retweet_count= data.frame(top_tweets_by_retweet_count %>%
+  group_by(status_id) %>%
+  arrange(-retweet_count) %>%
+  filter(row_number()==1))
+View(head(top_tweets_by_retweet_count))
+
+
+```
+
+Sources Analysis by tweets
+```{r}
+sources_by_tweets = as.data.frame(
+  table(
+    top_tweets_by_retweet_count[(
+      !is.na(top_tweets_by_retweet_count[,"source"])),
+      "source"]
+    )
+)
+
+names(sources_by_tweets)[1] = "source"
+names(sources_by_tweets)[2] = "count"
+
+sources_by_tweets = sources_by_tweets[
+  order(
+    sources_by_tweets["count"], 
+    decreasing = TRUE
+  ),
+]
+
+View(sources_by_tweets)
+```
+
+#5)Correlación con los perfiles de mayor impacto
+#Creación df variables numéricas
+```{r}
+numeric_variables=data.frame(cbind(
+  top_users_by_retweet_count$favorite_count,
+  top_users_by_retweet_count$retweet_count,
+  top_users_by_retweet_count$statuses_count,
+  top_users_by_retweet_count$followers_count,
+  top_users_by_retweet_count$friends_count
+))
+names(numeric_variables)<-c("favorite_count",
+  "retweet_count",
+  "statuses_count",
+  "followers_count",
+  "friends_count")
+View(numeric_variables)
+```
+
+#Correlación variables numéricas
+```{r}
+cor(na.omit(numeric_variables))
+```
+
+#Correlación variables numéricas (escala logar�?tmica)
+```{r}
+cor(log10(na.omit(numeric_variables)+1))
+```
+
+#Test de independencia verified
+#Tomamos como base para que un tweet sea popular, retweet_count >=100
+```{r}
+M=as.table(rbind(c(,88),c(25,25)))
+dimnames(M)=list(Popular=c("SI","NO"),Verified=c("SI","NO"))
+```
+
+
+```{r}
+table(top_users_by_retweet_count$verified)
+table(top_users_by_retweet_count$retweet_count>=1)
+M=table(top_users_by_retweet_count$verified,top_users_by_retweet_count$retweet_count>=1)
+dimnames(M)=list(Popular=c("SI","NO"),Verified=c("SI","NO"))
+Xsq=chisq.test(M)
+Xsq
+```
+
+#Gráfico de mosaicos
+```{r}
+mosaicplot(t(M), col=c("lightgreen","pink"), main="Verificado vs Tweets Populares")
+```
+
+#Como conclusión, no son independientes que tengan Retweets siendo cuentas verificadas.
+
+
+#9)Longitud de texto por plataforma
+#Armo df con source y longitud de texto, tomando is_quote:false y is_retweet:false
+```{r}
+df_source_text_widht_by_original_tweets=data.frame(tweets_mongo_covid19$find(query = '{"is_quote" : false, "is_retweet" : false}', 
+                            
+  fields=
+'{
+      "source": 1,
+      "display_text_width":1,
+      "text":1
+      
+}'
+))
+View(df_source_text_widht_by_original_tweets)
+```
+
+#Cuenta de negativos y totales
+```{r}
+sources_original = as.data.frame(
+  table(
+    df_source_text_widht_by_original_tweets[
+      !is.na(df_source_text_widht_by_original_tweets[,"display_text_width"]),
+      "source"]
+    ))
+
+View(sources_original)
+```
+
+#Genero un atributo con tipo de plataforma
+```{r}
+df_source_text_widht_by_original_tweets[df_source_text_widht_by_original_tweets$source == "Twitter for Android", "plataforma"] = "Smartphone"
+df_source_text_widht_by_original_tweets[df_source_text_widht_by_original_tweets$source == "Twitter for iPhone", "plataforma"] = "Smartphone"
+df_source_text_widht_by_original_tweets[df_source_text_widht_by_original_tweets$source == "TweetDeck", "plataforma"] = "Escritorio"
+df_source_text_widht_by_original_tweets$Longitud=nchar(df_source_text_widht_by_original_tweets$text)
+View(df_source_text_widht_by_original_tweets)
+
+```
+
+#Mediana de longitud por tipo de fuente
+```{r}
+aggregate(display_text_width ~ source, data=df_source_text_widht_by_original_tweets, FUN=median)
+aggregate(display_text_width ~ plataforma, data=df_source_text_widht_by_original_tweets, FUN=median)
+```
+
+#Boxplot por tipo de fuente
+```{r}
+boxplot(df_source_text_widht_by_original_tweets[df_source_text_widht_by_original_tweets$plataforma=="Smartphone"|                          df_source_text_widht_by_original_tweets$plataforma=="Escritorio","display_text_width"]~
+          df_source_text_widht_by_original_tweets[df_source_text_widht_by_original_tweets$plataforma=="Smartphone"|                                 df_source_text_widht_by_original_tweets$plataforma=="Escritorio","plataforma"],main="Longitud de texto-plataforma",ylab="Longitud de texto", xlab="Plataforma")
+```
+#Doble click sobre los tweets de escritorio
+```{r}
+escritorio=df_source_text_widht_by_original_tweets[(df_source_text_widht_by_original_tweets$plataforma=="Escritorio"),]
+escritorio[(!is.na(escritorio$display_text_width)),]
+```
+
+
+#6) Análisis de outliers
+```{r}
+k=200
+plot(head(log10(top_users_by_retweet_count$retweet_count+1),k),head(log10(top_users_by_retweet_count$favorite_count+1),k))
+```
+
+#Local outlier factor
+```{r}
+library(Rlof)
+k=100
+df_retweet_count_favorite_count=data.frame(cbind(head(log10(top_users_by_retweet_count$retweet_count+1),k),head(log10(top_users_by_retweet_count$favorite_count+1),k)))
+names(df_retweet_count_favorite_count)=c("retweet_count","favorite_count")
+# Calculamos LOF para k=3 vecinos por instancia
+df_retweet_count_favorite_count$score<-lof(df_retweet_count_favorite_count, k=2)
+umbral<-2
+df_retweet_count_favorite_count$outlier <- (df_retweet_count_favorite_count$score>umbral)
+df_retweet_count_favorite_count$color <- ifelse(df_retweet_count_favorite_count$outlier, "red", "black")
+View(df_retweet_count_favorite_count)
+ggplot(df_retweet_count_favorite_count, aes(x=retweet_count,y=favorite_count, color=outlier))+geom_point()
+```
+
+#Mahalanobis, vemos aquellos casos que se alejan de la linealidad, no necesariamente outliers unidimensionales.
+```{r}
+df_retweet_count_favorite_count$mahalanobis <- mahalanobis(df_retweet_count_favorite_count[,1:2], colMeans(df_retweet_count_favorite_count[,1:2]), cov(df_retweet_count_favorite_count[,1:2]))
+
+# Ordenamos de forma decreciente, seg?n el score de Mahalanobis
+df_retweet_count_favorite_count <- df_retweet_count_favorite_count[order(df_retweet_count_favorite_count$mahalanobis,decreasing = TRUE),]
+
+# Descartamos los outliers seg?n un umbral
+umbral<-5
+df_retweet_count_favorite_count$outlier2 <- (df_retweet_count_favorite_count$mahalanobis>umbral)
+
+ggplot(df_retweet_count_favorite_count, aes(x=retweet_count,y=favorite_count, color=outlier2))+geom_point()
+
+View(df_retweet_count_favorite_count)
+```
+
