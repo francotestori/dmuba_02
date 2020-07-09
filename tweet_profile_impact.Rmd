@@ -1,0 +1,320 @@
+---
+title: "Tweeter profile impact"
+output: html_notebook
+---
+Carga inicial del dataframe de tweets COVID-19
+```{r}
+library(mongolite)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+library(tm, exclude = "inspect")
+library(stringr)
+library(stringi)
+library(arules)
+library(tokenizers)
+
+
+tweets_mongo_covid19 <- mongo(
+  collection = "tweets_mongo_covid19", 
+  db = "DMUBA"
+)
+```
+
+Obtenemos nuestros tweets
+```{r}
+profiles = tweets_mongo_covid19$find(fields=
+'{
+      "user_id": 1,
+      "screen_name": 1,
+      "verified": 1,
+      "location": 1,
+      "source": 1,
+      "favorite_count": 1,
+      "retweet_count": 1,
+      "statuses_count": 1,
+      "followers_count": 1,
+      "friends_count": 1,
+        
+      "retweet_user_id": 1,
+      "retweet_screen_name": 1,
+      "retweet_verified": 1,
+      "retweet_location": 1,
+      "retweet_source": 1,
+      "retweet_favorite_count": 1,
+      "retweet_retweet_count": 1,
+      "retweet_statuses_count": 1,
+      "retweet_followers_count": 1,
+      "retweet_friends_count": 1,
+      
+      "quoted_user_id": 1,
+      "quoted_screen_name": 1,
+      "quoted_verified": 1,
+      "quoted_location": 1,
+      "quoted_source": 1,
+      "quoted_favorite_count": 1,
+      "quoted_retweet_count": 1,
+      "quoted_statuses_count": 1,
+      "quoted_followers_count": 1,
+      "quoted_friends_count": 1
+}'
+)
+```
+
+Extraemos los datos de los tweets originales
+```{r}
+original_profiles_header <- c(
+  'user_id',
+  'screen_name',
+  'verified',
+  'location',
+  'source',
+  'favorite_count',
+  'retweet_count',
+  'statuses_count',
+  'followers_count',
+  'friends_count'
+)
+original_profiles = profiles[,original_profiles_header]
+```
+
+Extraemos los datos de aquellos que fueron retweets y los transformamos a un unico modelo
+```{r}
+retweeted_profiles_header <- c(
+  'retweet_user_id',
+  'retweet_screen_name',
+  'retweet_verified',
+  'retweet_location',
+  'retweet_source',
+  'retweet_favorite_count',
+  'retweet_retweet_count',
+  'retweet_statuses_count',
+  'retweet_followers_count',
+  'retweet_friends_count'
+)
+
+retweeted_profiles = profiles[,retweeted_profiles_header]
+
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_user_id'] <- 'user_id'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_screen_name'] <- 'screen_name'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_verified'] <- 'verified'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_location'] <- 'location'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_source'] <- 'source'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_favorite_count'] <- 'favorite_count'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_retweet_count'] <- 'retweet_count'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_statuses_count'] <- 'statuses_count'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_followers_count'] <- 'followers_count'
+names(retweeted_profiles)[names(retweeted_profiles) == 'retweet_friends_count'] <- 'friends_count'
+```
+
+Extraemos los datos de aquellos que fueron Quotes y los transformamos a un unico modelo
+```{r}
+quoted_profiles_headers <- c(
+  'quoted_user_id',
+  'quoted_screen_name',
+  'quoted_verified',
+  'quoted_location',
+  'quoted_source',
+  'quoted_favorite_count',
+  'quoted_retweet_count',
+  'quoted_statuses_count',
+  'quoted_followers_count',
+  'quoted_friends_count'
+)
+quoted_profiles = profiles[,quoted_profiles_headers]
+
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_user_id'] <- 'user_id'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_screen_name'] <- 'screen_name'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_verified'] <- 'verified'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_location'] <- 'location'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_source'] <- 'source'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_favorite_count'] <- 'favorite_count'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_retweet_count'] <- 'retweet_count'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_statuses_count'] <- 'statuses_count'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_followers_count'] <- 'followers_count'
+names(quoted_profiles)[names(quoted_profiles) == 'quoted_friends_count'] <- 'friends_count'
+```
+
+Combinamos y unificamos tweets, retweets y quotes
+```{r}
+combined_profiles = rbind(
+  original_profiles, 
+  retweeted_profiles, 
+  quoted_profiles
+)
+
+# Si buscamos duplicados en todas las columnas hay variaciones de followers entre usuarios
+#tweet_profiles_df = combined_profiles[!duplicated(combined_profiles),]
+
+tweet_profiles_df = combined_profiles[!duplicated(combined_profiles[,"user_id"]),]
+
+summary(tweet_profiles_df)
+```
+
+
+Seleccionamos los usuarios con mayor repecusión (retweet_count)
+```{r}
+top_users_by_retweet_count=combined_profiles
+
+#Ordenamos por retweet_count de manera decreciente, hay mismos tw con distinto retweet_count
+top_users_by_retweet_count= top_users_by_retweet_count %>%
+  group_by(user_id) %>%
+  arrange(-retweet_count) %>%
+  filter(row_number()==1)
+```
+
+Discretizamos las variables numericas
+```{r}
+# Friends count
+top_users_by_retweet_count$cat_friends = discretize(
+  top_users_by_retweet_count$friends_count, 
+  labels=c("pocos", "medio", "muchos")
+)
+
+# Favorites count
+top_users_by_retweet_count$cat_favorite = discretize(
+  log10(top_users_by_retweet_count$favorite_count+1),
+  method = "fixed", 
+  breaks = c(-Inf, 0.0001, 1.5, 2, Inf), 
+  labels = c("nada","pocos", "medio", "muchos")
+)
+
+# Retweet count
+top_users_by_retweet_count$cat_rt = discretize(
+  log10(top_users_by_retweet_count$retweet_count+1),
+  method = "fixed", 
+  breaks = c(-Inf, 0.0001, 1.5, 2, Inf), 
+  labels=c("nada","pocos", "medio", "muchos")
+)
+
+# Tweets sent by profile
+top_users_by_retweet_count$cat_statuses = discretize(
+  top_users_by_retweet_count$statuses_count, 
+  labels=c("pocos", "medio", "muchos")
+)
+
+# Followers by profile
+top_users_by_retweet_count$cat_followers = discretize(
+  top_users_by_retweet_count$followers_count, 
+  labels=c("pocos", "medio", "muchos")
+)
+
+top_users_by_retweet_count$cat_verified = as.factor(
+  ifelse(
+    top_users_by_retweet_count$verified, 
+    "si", 
+    NA
+  )
+)
+```
+
+Generamos reglas para los retweets
+```{r}
+# generación de reglas: Aquellos con muchos RT
+retweet_transactions <- as(
+  top_users_by_retweet_count[
+    c(
+      "cat_friends", 
+      "cat_favorite",
+      "cat_verified",
+      "cat_statuses",
+      "cat_followers", 
+      "cat_rt"
+  )], 
+  "transactions"
+)
+
+retweet_rules = apriori(
+  retweet_transactions, 
+  parameter = list(
+    target="rule", 
+    support=0.01, 
+    confidence=0.02
+  ), 
+  appearance = list(rhs = 'cat_rt=muchos')
+)
+
+print(retweet_rules)
+
+inspect(
+  sort(
+    retweet_rules,
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```
+
+Generamos reglas para los favorites
+```{r}
+# generación de reglas: Aquellos con muchos Favs
+favorite_transactions <- as(
+  top_users_by_retweet_count[
+    c(
+      "cat_friends",
+      "cat_favorite",
+      "cat_verified",
+      "cat_statuses",
+      "cat_followers", 
+      "cat_rt"
+  )], 
+  "transactions"
+)
+
+favorite_rules = apriori(
+  favorite_transactions, 
+  parameter = list(
+    target="rule", 
+    support=0.01, 
+    confidence=0.02
+  ), 
+  appearance = list(rhs = 'cat_favorite=muchos')
+)
+
+print(favorite_rules)
+
+inspect(
+  sort(
+    favorite_rules,
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```
+
+Generamos reglas para ver la influencia de las cuentas verificadas
+```{r}
+# generación de reglas 2- Influencia del verified
+verified_transactions <- as(
+  top_users_by_retweet_count[
+    c(
+      "cat_friends",
+      "cat_favorite",
+      "cat_verified",
+      "cat_statuses",
+      "cat_followers", 
+      "cat_rt"
+  )], 
+  "transactions"
+)
+
+verified_rules = apriori(
+  verified_transactions, 
+  parameter = list(
+    target="rule", 
+    support=0.0001, 
+    confidence=0.02
+  ), appearance = list(lhs = 'cat_verified=si')
+)
+
+print(verified_rules)
+
+inspect(
+  sort(
+    verified_rules, 
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```

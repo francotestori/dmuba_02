@@ -1,0 +1,115 @@
+---
+title: "Text Analisis"
+output: html_notebook
+---
+
+Carga inicial del dataframe de tweets COVID-19
+```{r}
+library(mongolite)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+library(tm, exclude = "inspect")
+library(stringr)
+library(stringi)
+library(arules)
+library(tokenizers)
+
+
+tweets_mongo_covid19 <- mongo(
+  collection = "tweets_mongo_covid19", 
+  db = "DMUBA"
+)
+```
+
+Dataframe de texto
+```{r}
+df_text = tweets_mongo_covid19$find(
+  query = '{}',  
+  fields = '{"user_id" : true, "text" : true, "_id": false}'
+)
+```
+
+Limpiamos caracteres no alfanumericos
+```{r}
+# Se quitan caracteres no alfanum?ricos (por cuestiones de errores en RStudio)
+df_text$text <- gsub("[^[:alnum:][:blank:]?&/\\-]", "", df_text$text)
+df_text$text <- gsub("U00..", "", df_text$text)
+```
+
+Limpiamos los textos
+```{r}
+# Se quitan acentos
+df_text$text = stri_trans_general(df_text$text, "Latin-ASCII")
+# Se pasa a minusculas
+df_text$text = tolower(df_text$text)
+# Se quita puntuacion
+df_text$text = removePunctuation(df_text$text)
+# Se quitan n?meros
+df_text$text = removeNumbers(df_text$text)
+# se quitan espacios extras
+df_text$text =  stripWhitespace(df_text$text)
+# se quitan espacios al principio y final de la cadena
+df_text$text = str_trim(df_text$text)
+# sin stop words
+df_text$text = removeWords(df_text$text, stopwords("spanish"))
+```
+
+Tokenizamos el texto (separamos todos los terminos)
+```{r}
+# se separa el texto en t?rminos
+df_text$words = tokenizers::tokenize_words(df_text$text, simplify = T)
+```
+
+Armamos tuplas usuario-termino (user_id,words)
+```{r}
+# se pasa a formato pares: user-t?rmino
+df_text = df_text %>% select("user_id", "words")  %>% unnest(words) %>%  distinct()
+```
+
+Eliminamos terminos que no queremos
+```{r}
+df_text = df_text[-grep(x = df_text$words, pattern = "^(covid|corona|coronavirus|cuarentena|virus|covid19|covid-19)"),]
+```
+
+Agregamos el prefijo de de tipo de atributo (word)
+```{r}
+# se agrega prefijo de tipo de ????tem:
+df_text$item = paste0("word=", df_text$words)
+```
+
+Generamos reglas de asociaci?n para los textos
+```{r}
+# reglas
+text_transactions <- as(
+  split(df_text$item, df_text$user_id), 
+  "transactions"
+)
+print(text_transactions)
+```
+
+
+```{r}
+rules = apriori(
+  text_transactions, 
+  parameter=list(
+    target="rule", 
+    support=0.15, 
+    confidence=0.2
+  )
+)
+
+print(rules)
+```
+
+```{r}
+inspect(
+    sort(rules, by="lift", decreasing = TRUE)[1:3]
+)
+
+inspect(
+  head(rules, 20)
+)
+```
+
