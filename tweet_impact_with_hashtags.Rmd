@@ -451,3 +451,9 @@ inspect(
   head(rules, 20)
 )
 ```
+
+Buscar regla
+```{r}
+subset(hashtags_items_rules, subset = lhs  %pin% "hashtag=")
+```
+

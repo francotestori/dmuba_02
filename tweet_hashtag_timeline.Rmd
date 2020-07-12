@@ -1,0 +1,427 @@
+---
+title: "Tweet Time Analisis"
+output: html_notebook
+---
+
+Carga inicial del dataframe de tweets COVID-19
+```{r}
+library(mongolite)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+library(tm, exclude = "inspect")
+library(stringr)
+library(stringi)
+library(arules)
+library(tokenizers)
+
+
+tweets_mongo_covid19 <- mongo(
+  collection = "tweets_mongo_covid19", 
+  db = "DMUBA"
+)
+```
+
+
+# Exploramos el uso de hashtags
+Ya teniendo una primera impresión de la evolución de los tweets en base sus fechas, exploramos el uso de hashtags
+```{r}
+expanded_hashtags = tweets_mongo_covid19$aggregate(
+'[
+    {
+        "$unwind": "$hashtags"
+    },
+    {
+        "$project": {
+            "status_id": 1,
+            "verified": 1,
+            "location": 1,
+            "source": 1,
+            "created_at": {
+                "$dateToString": { "date": "$created_at"}
+            },
+            "favorite_count": 1,
+            "retweet_count": 1,
+
+            "retweet_status_id": 1,
+            "retweet_verified": 1,
+            "retweet_location":1,
+            "retweet_source": 1,
+            "retweet_created_at": {
+                "$cond": { 
+                    "if": { 
+                        "$eq" : ["$retweet_created_at", {}] 
+                    }, 
+                    "then": null, 
+                    "else": {
+                        "$dateToString": {"date": "$retweet_created_at"}
+                    }
+                }
+            },
+            "retweet_favorite_count": 1,
+            "retweet_retweet_count": 1,
+
+            "quoted_status_id": 1,
+            "quoted_verified": 1,
+            "quoted_location": 1,
+            "quoted_source": 1, 
+             "quoted_created_at": {
+                "$cond": { 
+                    "if": { 
+                        "$eq" : ["$quoted_created_at", {}] 
+                    }, 
+                    "then": null, 
+                    "else": {
+                        "$dateToString": {"date": "$quoted_created_at"}
+                    }
+                }
+            },
+            "quoted_favorite_count": 1,
+            "quoted_retweet_count": 1,
+
+            "hashtags": 1
+        }
+    }
+]'
+)
+```
+
+```{r}
+original_tweet_headers <- c(
+  'status_id',
+  'verified',
+  'location',
+  'source',
+  'created_at',
+  'favorite_count',
+  'retweet_count',
+  'hashtags'
+)
+original_tweet_hashtags = expanded_hashtags[,original_tweet_headers]
+
+# Retweets
+retweeted_tweet_headers <- c(
+  'retweet_status_id',
+  'retweet_verified',
+  'retweet_location',
+  'retweet_source',
+  'retweet_created_at',
+  'retweet_favorite_count',
+  'retweet_retweet_count',
+  'hashtags'
+)
+
+retweeted_tweet_hashtags = expanded_hashtags[,retweeted_tweet_headers]
+
+names(retweeted_tweet_hashtags)[names(retweeted_tweet_hashtags) == 'retweet_status_id'] <- 'status_id'
+names(retweeted_tweet_hashtags)[names(retweeted_tweet_hashtags) == 'retweet_verified'] <- 'verified'
+names(retweeted_tweet_hashtags)[names(retweeted_tweet_hashtags) == 'retweet_location'] <- 'location'
+names(retweeted_tweet_hashtags)[names(retweeted_tweet_hashtags) == 'retweet_source'] <- 'source'
+names(retweeted_tweet_hashtags)[names(retweeted_tweet_hashtags) == 'retweet_created_at'] <- 'created_at'
+names(retweeted_tweet_hashtags)[names(retweeted_tweet_hashtags) == 'retweet_favorite_count'] <- 'favorite_count'
+names(retweeted_tweet_hashtags)[names(retweeted_tweet_hashtags) == 'retweet_retweet_count'] <- 'retweet_count'
+
+# Quotes
+quoted_tweet_headers <- c(
+  'quoted_status_id',
+  'quoted_verified',
+  'quoted_location',
+  'quoted_source',
+  'quoted_created_at',
+  'quoted_favorite_count',
+  'quoted_retweet_count',
+  'hashtags'
+)
+quoted_tweet_hashtags = expanded_hashtags[,quoted_tweet_headers]
+
+names(quoted_tweet_hashtags)[names(quoted_tweet_hashtags) == 'quoted_status_id'] <- 'status_id'
+names(quoted_tweet_hashtags)[names(quoted_tweet_hashtags) == 'quoted_verified'] <- 'verified'
+names(quoted_tweet_hashtags)[names(quoted_tweet_hashtags) == 'quoted_location'] <- 'location'
+names(quoted_tweet_hashtags)[names(quoted_tweet_hashtags) == 'quoted_source'] <- 'source'
+names(quoted_tweet_hashtags)[names(quoted_tweet_hashtags) == 'quoted_created_at'] <- 'created_at'
+names(quoted_tweet_hashtags)[names(quoted_tweet_hashtags) == 'quoted_favorite_count'] <- 'favorite_count'
+names(quoted_tweet_hashtags)[names(quoted_tweet_hashtags) == 'quoted_retweet_count'] <- 'retweet_count'
+```
+
+```{r}
+combined_hashtags = rbind(original_tweet_hashtags, retweeted_tweet_hashtags, quoted_tweet_hashtags)
+
+combined_hashtags['created_at_R_date'] = as.POSIXct(
+  combined_hashtags$created_at, 
+  format="%Y-%m-%dT", 
+  tz="UTC"
+)
+combined_hashtags['created_at'] = as.POSIXct(
+  combined_hashtags$created_at, 
+  format="%Y-%m-%dT%H:%M:%S", 
+  tz="UTC"
+)
+
+# Limpiamos duplicados
+combined_hashtags = combined_hashtags[!duplicated(combined_hashtags),]
+combined_hashtags[!is.na(combined_hashtags['created_at_R_date']),]
+```
+
+```{r}
+hashtags_counts_by_date = as.data.frame(
+  combined_hashtags %>%
+  group_by(created_at_R_date, hashtags) %>%
+  count(hashtags)
+)
+
+names(hashtags_counts_by_date)[1] = 'date'
+names(hashtags_counts_by_date)[3] = 'count'
+
+# Elimino todos los tweets sin hashtags (NA)
+hashtags_counts_by_date = hashtags_counts_by_date[!is.na(hashtags_counts_by_date['hashtags']),]
+```
+
+```{r}
+# Elimino ahora valores de hashtags que considero genéricos o de clasificación 
+# Estos hashtags no agregan valor al contenido
+filtered_hashtag_counts_by_date = as.data.frame(
+  hashtags_counts_by_date %>%
+  filter(
+    !str_detect(str_to_lower(hashtags), str_to_lower(".*COVID.*|.*coronavirus.*|.*cuarentena*"))
+  )
+)
+
+# Consigo todos los hashtags y su conteo por fecha
+top_hashtags_by_news_date = as.data.frame(
+  filtered_hashtag_counts_by_date %>% 
+  group_by(date) 
+)
+
+# Consigo los N hashtags mas utilizados por fecha
+#n = 3
+#top_hashtags_by_news_date = as.data.frame(
+#  filtered_hashtag_counts_by_date %>% 
+#  group_by(date) %>% 
+#  top_n(n, count)
+#)
+```
+
+Limpiamos caracteres no alfanumericos
+```{r}
+df_text = top_hashtags_by_news_date
+
+# Se quitan caracteres no alfanum?ricos (por cuestiones de errores en RStudio)
+df_text$hashtags <- gsub("[^[:alnum:][:blank:]?&/\\-]", "", df_text$hashtags)
+df_text$hashtags <- gsub("U00..", "", df_text$hashtags)
+```
+
+Limpiamos los textos
+```{r}
+# Se quitan acentos
+df_text$hashtags = stri_trans_general(df_text$hashtags, "Latin-ASCII")
+# Se pasa a minusculas
+df_text$hashtags = tolower(df_text$hashtags)
+# Se quita puntuacion
+df_text$hashtags = removePunctuation(df_text$hashtags)
+# Se quitan n?meros
+df_text$hashtags = removeNumbers(df_text$hashtags)
+# se quitan espacios extras
+df_text$hashtags =  stripWhitespace(df_text$hashtags)
+# se quitan espacios al principio y final de la cadena
+df_text$hashtags = str_trim(df_text$hashtags)
+# sin stop words
+df_text$hashtags = removeWords(df_text$hashtags, stopwords("spanish"))
+```
+
+```{r}
+# Eliminamos fechas no definidas
+df_text = df_text[!is.na(df_text$date),]
+
+# Asignamos NA a hashtags vacios
+df_text[df_text$hashtags=="",] <- NA
+
+# Eliminamos hashtahs no definidos
+df_text = df_text[!is.na(df_text$hashtags),]
+
+# Unifico hashtags por fecha en lowercase
+df_text = as.data.frame(
+  df_text %>%
+  group_by(date, hashtags) %>%
+  summarize(tt_count = sum(count))
+)
+```
+
+Selecciono los hashtags top N de mi df de hashtags normalizados
+```{r}
+n = 5
+df_hashtag = as.data.frame(
+  df_text %>% 
+  group_by(date) %>% 
+  top_n(n, tt_count)
+)
+
+names(df_hashtag)[2] = "hashtag"
+```
+
+Ahora vamos a buscar discretizar las veces que se utilizaron nuestros hashtags a lo largo del tiempo para aplicar reglas de asociación
+```{r}
+# TT Impact
+# Aplicamos los cortes seleccionados a criterio y sesgo de identificar lo que nos parece es impacto
+df_hashtag$tt_impact = discretize(
+  df_hashtag$tt_count, 
+  method = "fixed",
+  breaks = c(1, 10, 40, 150, Inf), 
+  labels = c("nada","pocos", "medio", "muchos")
+)
+```
+
+Reduzo mis fechas para contemplar el rango desde el 1 de marzo dado que en estas fechas empezaron a aparecer
+datos de COVID en latinoamerica
+```{r}
+march_date=as.POSIXct("2020-03-01")
+
+df_hashtag = as.data.frame(
+  df_hashtag %>%
+  filter(date >= march_date & tt_count >= 40)
+)
+
+summary(df_hashtag)
+```
+
+Encuentro aquellos hashtag que considero tuvieron algún impacto de tt en los tweets desde marzo
+```{r}
+unique_hashtag = unique(df_hashtag$hashtag)
+unique_hashtag
+```
+
+
+Generamos columnas de presencia/ausencia para nuestros TTs
+```{r}
+df_hashtag$tt_ultimahora = df_hashtag$hashtag == "ultimahora"
+df_hashtag$tt_ultimahora = ifelse(df_hashtag$tt_ultimahora,"S",NA)
+
+df_hashtag$tt_confirmado = df_hashtag$hashtag == "confirmado"
+df_hashtag$tt_confirmado = ifelse(df_hashtag$tt_confirmado,"S",NA)
+
+df_hashtag$tt_dedicareestemayo = df_hashtag$hashtag == "dedicareestemayo"
+df_hashtag$tt_dedicareestemayo = ifelse(df_hashtag$tt_dedicareestemayo,"S",NA)
+
+df_hashtag$tt_may = df_hashtag$hashtag == "may"
+df_hashtag$tt_may = ifelse(df_hashtag$tt_may,"S",NA)
+
+df_hashtag$tt_cuba = df_hashtag$hashtag == "cuba"
+df_hashtag$tt_cuba = ifelse(df_hashtag$tt_cuba,"S",NA)
+
+df_hashtag$tt_proteccionyaccion = df_hashtag$hashtag == "proteccionyaccion"
+df_hashtag$tt_proteccionyaccion = ifelse(df_hashtag$tt_proteccionyaccion,"S",NA)
+
+df_hashtag$tt_unidosenbatalla = df_hashtag$hashtag == "unidosenbatalla"
+df_hashtag$tt_unidosenbatalla = ifelse(df_hashtag$tt_unidosenbatalla,"S",NA)
+
+df_hashtag$tt_graciaspuebloheroico = df_hashtag$hashtag == "graciaspuebloheroico"
+df_hashtag$tt_graciaspuebloheroico = ifelse(df_hashtag$tt_graciaspuebloheroico,"S",NA)
+
+df_hashtag$tt_mexiquensesencrisis = df_hashtag$hashtag == "mexiquensesencrisis"
+df_hashtag$tt_mexiquensesencrisis = ifelse(df_hashtag$tt_mexiquensesencrisis,"S",NA)
+
+df_hashtag$tt_sarscov = df_hashtag$hashtag == "sarscov"
+df_hashtag$tt_sarscov = ifelse(df_hashtag$tt_sarscov,"S",NA)
+
+df_hashtag$tt_holaperu = df_hashtag$hashtag == "holaperu"
+df_hashtag$tt_holaperu = ifelse(df_hashtag$tt_holaperu,"S",NA)
+
+df_hashtag$tt_packsardientes = df_hashtag$hashtag == "packsardientes"
+df_hashtag$tt_packsardientes = ifelse(df_hashtag$tt_packsardientes,"S",NA)
+
+df_hashtag$tt_whatsapp = df_hashtag$hashtag == "whatsapp"
+df_hashtag$tt_whatsapp = ifelse(df_hashtag$tt_whatsapp,"S",NA)
+
+df_hashtag$tt_sntesalud = df_hashtag$hashtag == "sntesalud"
+df_hashtag$tt_sntesalud = ifelse(df_hashtag$tt_sntesalud,"S",NA)
+
+df_hashtag$tt_venezuela = df_hashtag$hashtag == "venezuela"
+df_hashtag$tt_venezuela = ifelse(df_hashtag$tt_venezuela,"S",NA)
+
+df_hashtag$tt_envivo = df_hashtag$hashtag == "envivo"
+df_hashtag$tt_envivo = ifelse(df_hashtag$tt_envivo,"S",NA)
+
+df_hashtag$tt_obelisco = df_hashtag$hashtag == "obelisco"
+df_hashtag$tt_obelisco = ifelse(df_hashtag$tt_obelisco,"S",NA)
+
+df_hashtag$tt_spacex = df_hashtag$hashtag == "spacex"
+df_hashtag$tt_spacex = ifelse(df_hashtag$tt_spacex,"S",NA)
+
+df_hashtag$tt_unionluchaycompromiso = df_hashtag$hashtag == "unionluchaycompromiso"
+df_hashtag$tt_unionluchaycompromiso = ifelse(df_hashtag$tt_unionluchaycompromiso,"S",NA)
+
+df_hashtag$tt_anonymous = df_hashtag$hashtag == "anonymous"
+df_hashtag$tt_anonymous = ifelse(df_hashtag$tt_anonymous,"S",NA)
+
+df_hashtag$tt_jun = df_hashtag$hashtag == "jun"
+df_hashtag$tt_jun = ifelse(df_hashtag$tt_jun,"S",NA)
+
+df_hashtag$tt_nuevanormalidadrelativa = df_hashtag$hashtag == "nuevanormalidadrelativa"
+df_hashtag$tt_nuevanormalidadrelativa = ifelse(df_hashtag$tt_nuevanormalidadrelativa,"S",NA)
+
+df_hashtag$tt_racismoes = df_hashtag$hashtag == "racismoes"
+df_hashtag$tt_racismoes = ifelse(df_hashtag$tt_racismoes,"S",NA)
+
+df_hashtag$tt_graciasporcuidarnos = df_hashtag$hashtag == "graciasporcuidarnos"
+df_hashtag$tt_graciasporcuidarnos = ifelse(df_hashtag$tt_graciasporcuidarnos,"S",NA)
+
+```
+
+Generamos reglas para mi analisis
+```{r}
+# reglas de asociación
+tt_transactions <- as(
+  df_hashtag[
+    c(
+      "date",
+      "tt_impact",
+      "tt_ultimahora",
+      "tt_dedicareestemayo",
+      "tt_may",
+      "tt_cuba",
+      "tt_proteccionyaccion",
+      "tt_unidosenbatalla",
+      "tt_graciaspuebloheroico",
+      "tt_mexiquensesencrisis",
+      "tt_sarscov",
+      "tt_holaperu",
+      "tt_packsardientes",
+      "tt_whatsapp",
+      "tt_sntesalud",
+      "tt_venezuela",
+      "tt_envivo",
+      "tt_obelisco",
+      "tt_spacex",
+      "tt_unionluchaycompromiso",
+      "tt_anonymous",
+      "tt_jun",
+      "tt_nuevanormalidadrelativa",
+      "tt_racismoes",
+      "tt_graciasporcuidarnos"
+    )
+  ], 
+  "transactions"
+)
+
+
+tt_rules = apriori(
+  tt_transactions, 
+  parameter = list(
+    target="rule", 
+    support=0.01, 
+    confidence=0.02
+  )
+)
+
+print(tt_rules)
+
+inspect(
+  sort(
+    tt_rules,
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```
+
+

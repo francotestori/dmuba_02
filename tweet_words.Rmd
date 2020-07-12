@@ -64,7 +64,7 @@ df_text$words = tokenizers::tokenize_words(df_text$text, simplify = T)
 
 Armamos tuplas usuario-termino (user_id,words)
 ```{r}
-# se pasa a formato pares: user-t?rmino
+# se pasa a formato pares: user-termino
 df_text = df_text %>% select("user_id", "words")  %>% unnest(words) %>%  distinct()
 ```
 
@@ -73,13 +73,13 @@ Eliminamos terminos que no queremos
 df_text = df_text[-grep(x = df_text$words, pattern = "^(covid|corona|coronavirus|cuarentena|virus|covid19|covid-19)"),]
 ```
 
-Agregamos el prefijo de de tipo de atributo (word)
+Agregamos el prefijo de tipo de atributo (word)
 ```{r}
-# se agrega prefijo de tipo de ????tem:
+# se agrega prefijo de tipo de word al item:
 df_text$item = paste0("word=", df_text$words)
 ```
 
-Generamos reglas de asociaci?n para los textos
+Generamos reglas de asociacion para los textos
 ```{r}
 # reglas
 text_transactions <- as(
