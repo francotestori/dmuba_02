@@ -424,4 +424,16 @@ inspect(
 )
 ```
 
+```{r}
+inspect(
+  sort(
+    subset(tt_rules, subset = lhs  %pin% "tt_obelisco"),
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+
+subset(tt_rules, subset = rhs  %pin% "tt_obelisco")
+
+```
 

@@ -1,0 +1,252 @@
+---
+title: "Tweet Time Words"
+output: html_notebook
+---
+
+Carga inicial del dataframe de tweets COVID-19
+```{r}
+library(mongolite)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(dplyr)
+library(tm, exclude = "inspect")
+library(stringr)
+library(stringi)
+library(arules)
+library(tokenizers)
+
+
+tweets_mongo_covid19 <- mongo(
+  collection = "tweets_mongo_covid19", 
+  db = "DMUBA"
+)
+```
+
+
+
+# Exploramos el uso de hashtags
+Ya teniendo una primera impresión de la evolución de los tweets en base sus fechas, exploramos el uso de hashtags
+```{r}
+tweet_text = tweets_mongo_covid19$aggregate(
+'[
+    {
+        "$match": {}
+    },
+    {
+        "$project": {
+            "status_id": 1,
+            "verified": 1,
+            "location": 1,
+            "source": 1,
+            "created_at": {
+                "$dateToString": { "date": "$created_at"}
+            },
+            "favorite_count": 1,
+            "retweet_count": 1,
+            "text": 1,
+
+            "retweet_status_id": 1,
+            "retweet_verified": 1,
+            "retweet_location":1,
+            "retweet_source": 1,
+            "retweet_created_at": {
+                "$cond": { 
+                    "if": { 
+                        "$eq" : ["$retweet_created_at", {}] 
+                    }, 
+                    "then": null, 
+                    "else": {
+                        "$dateToString": {"date": "$retweet_created_at"}
+                    }
+                }
+            },
+            "retweet_favorite_count": 1,
+            "retweet_retweet_count": 1,
+            "retweet_text": 1,
+
+            "quoted_status_id": 1,
+            "quoted_verified": 1,
+            "quoted_location": 1,
+            "quoted_source": 1, 
+             "quoted_created_at": {
+                "$cond": { 
+                    "if": { 
+                        "$eq" : ["$quoted_created_at", {}] 
+                    }, 
+                    "then": null, 
+                    "else": {
+                        "$dateToString": {"date": "$quoted_created_at"}
+                    }
+                }
+            },
+            "quoted_favorite_count": 1,
+            "quoted_retweet_count": 1,
+            "quoted_text": 1
+        }
+    }
+]'
+)
+```
+
+```{r}
+original_tweet_headers <- c(
+  'status_id',
+  'verified',
+  'location',
+  'source',
+  'created_at',
+  'favorite_count',
+  'retweet_count',
+  'text'
+)
+original_tweets = tweet_text[,original_tweet_headers]
+
+# Retweets
+retweeted_tweet_headers <- c(
+  'retweet_status_id',
+  'retweet_verified',
+  'retweet_location',
+  'retweet_source',
+  'retweet_created_at',
+  'retweet_favorite_count',
+  'retweet_retweet_count',
+  'retweet_text'
+)
+
+retweeted_tweets = tweet_text[,retweeted_tweet_headers]
+
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_status_id'] <- 'status_id'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_verified'] <- 'verified'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_location'] <- 'location'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_source'] <- 'source'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_created_at'] <- 'created_at'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_favorite_count'] <- 'favorite_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_retweet_count'] <- 'retweet_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_text'] <- 'text'
+
+# Quotes
+quoted_tweet_headers <- c(
+  'quoted_status_id',
+  'quoted_verified',
+  'quoted_location',
+  'quoted_source',
+  'quoted_created_at',
+  'quoted_favorite_count',
+  'quoted_retweet_count',
+  'quoted_text'
+)
+quoted_tweets = tweet_text[,quoted_tweet_headers]
+
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_status_id'] <- 'status_id'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_verified'] <- 'verified'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_location'] <- 'location'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_source'] <- 'source'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_created_at'] <- 'created_at'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_favorite_count'] <- 'favorite_count'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_retweet_count'] <- 'retweet_count'
+names(quoted_tweets)[names(quoted_tweets) == 'quoted_text'] <- 'text'
+```
+
+Combinamos nuestros tweets y aplicamos transformaciones a las fechas
+```{r}
+combined_tweets = rbind(original_tweets, retweeted_tweets, quoted_tweets)
+
+combined_tweets['tweet_date'] = as.POSIXct(
+  combined_tweets$created_at, 
+  format="%Y-%m-%dT", 
+  tz="UTC"
+)
+
+combined_tweets['created_at'] = as.POSIXct(
+  combined_tweets$created_at, 
+  format="%Y-%m-%dT%H:%M:%S", 
+  tz="UTC"
+)
+
+# Limpiamos duplicados
+combined_tweets = combined_tweets[!duplicated(combined_tweets),]
+combined_tweets[!is.na(combined_tweets['tweet_date']),]
+```
+
+Hacemos un tratamiento de textos
+```{r}
+### ----- Tratamiento de Textos ------------
+df_text = combined_tweets[,c("status_id", "source", "location", "tweet_date", "text")]
+```
+
+Limpiamos caracteres no alfanumericos
+```{r}
+# Se quitan caracteres no alfanumÃ©ricos (por cuestiones de errores en RStudio)
+df_text$text <- gsub("[^[:alnum:][:blank:]?&/\\-]", "", df_text$text)
+df_text$text <- gsub("U00..", "", df_text$text)
+```
+
+Limpiamos los textos
+```{r}
+# Se quitan acentos
+df_text$text = stri_trans_general(df_text$text, "Latin-ASCII")
+# Se pasa a minusculas
+df_text$text = tolower(df_text$text)
+# Se quita puntuacion
+df_text$text = removePunctuation(df_text$text)
+# Se quitan nÃºmeros
+df_text$text = removeNumbers(df_text$text)
+# se quitan espacios extras
+df_text$text =  stripWhitespace(df_text$text)
+# se quitan espacios al principio y final de la cadena
+df_text$text = str_trim(df_text$text)
+# sin stop words
+df_text$text = removeWords(df_text$text, stopwords("spanish"))
+# sin stop words english
+df_text$text = removeWords(df_text$text, stopwords("english"))
+```
+
+Tokenizamos el texto (separamos todos los terminos)
+```{r}
+# se separa el texto en terminos
+df_text$words = tokenizers::tokenize_words(df_text$text, simplify = T)
+```
+
+Armamos un dataframe con las palabras utilizadas en cada tweet por día
+```{r}
+# se pasa a formato pares: tweet-words
+df_words_with_date = df_text %>% select("status_id", "tweet_date", "words")  %>% unnest(words) %>%  distinct()
+```
+
+Contamos las palabras por fecha filtrando por terminologia que no queremos
+```{r}
+words_counts_by_date <- df_words_with_date %>%
+  filter(
+    !str_detect(str_to_lower(words), str_to_lower(".*COVID.*|.*coronavirus.*|.*cuarentena*"))
+  ) %>%
+  group_by(tweet_date, words) %>%
+  count(words)
+  
+
+total_words <- words_counts_by_date %>% 
+  group_by(words) %>% 
+  summarize(total = sum(n))
+
+words_counts_by_date <- left_join(words_counts_by_date, total_words)
+
+words_counts_by_date <- words_counts_by_date %>%
+    bind_tf_idf(words, tweet_date, n)
+
+words_counts_by_date = as.data.frame(
+  words_counts_by_date
+)
+
+names(words_counts_by_date)[3] = 'count'
+
+# Elimino todos los tweets sin hashtags (NA)
+words_counts_by_date = words_counts_by_date[!is.na(words_counts_by_date['words']),]
+```
+
+Aplicamos el scoring de ocurrencias de palabras por día sobre el total de incidencias para determinar su peso.
+```{r}
+
+View(words_counts_by_date[words_counts_by_date$count >= 100,])
+```
+
