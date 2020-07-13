@@ -101,7 +101,10 @@ original_tweet_headers <- c(
   'retweet_count',
   'text'
 )
-original_tweets = tweet_text[,original_tweet_headers]
+original_tweets = tweet_text[
+  is.na(tweet_text$retweet_text) & is.na(tweet_text$quoted_text),
+  original_tweet_headers
+]
 
 # Retweets
 retweeted_tweet_headers <- c(
@@ -246,7 +249,107 @@ words_counts_by_date = words_counts_by_date[!is.na(words_counts_by_date['words']
 
 Aplicamos el scoring de ocurrencias de palabras por día sobre el total de incidencias para determinar su peso.
 ```{r}
+# Filtramos palabras
+selected_words = words_counts_by_date[words_counts_by_date$count >= 20,]
 
-View(words_counts_by_date[words_counts_by_date$count >= 100,])
+# No filtramos por count
+#selected_words = words_counts_by_date
+
+selected_words = selected_words[order(selected_words$tweet_date, selected_words$tf_idf, decreasing = TRUE),]
+
+selected_words <-
+  selected_words %>%
+    group_by(tweet_date) %>%
+    top_n(10, tf_idf)
 ```
 
+Agregamos el prefijo de de tipo de atributo (word)
+```{r}
+df_words = selected_words[,c("tweet_date","words","tf_idf")]
+
+# se agrega prefijo de tipo de Ã�tem:
+#df_words$words = paste0("word=", df_words$words)
+```
+
+
+Discretizamos el valor de tf_idf
+```{r}
+df_words$words_impact = discretize(
+  df_words$tf_idf,
+  method = "fixed",
+  breaks = c(0 , 0.002955 , 0.004168 , Inf),
+  labels = c("pocos", "medio", "mucho")
+)
+```
+
+Generamos nuestras transacciones
+```{r}
+# reglas
+words_impact_transactions <- as(
+  df_words[
+    c(
+    "tweet_date",
+    "words",
+    "words_impact"
+    )
+  ], 
+  "transactions"
+)
+
+print(words_impact_transactions)
+```
+
+Generamos nuestras reglas
+```{r}
+words_impact_rules = apriori(
+  words_impact_transactions, 
+  parameter = list(
+    target="rule", 
+    support=0.01, 
+    confidence=0.02
+  )
+)
+
+print(words_impact_rules)
+
+inspect(
+  sort(
+    words_impact_rules,
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```
+
+Reglas para palabras ordenadas por lift
+```{r}
+inspect(
+  sort(
+    subset(words_impact_rules, subset = lhs  %pin% "words="),
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```
+
+Reglas en base al impacto medio/mucho
+```{r}
+inspect(
+  sort(
+    subset(words_impact_rules, subset = lhs  %pin%  "words_impact=medio" | lhs  %pin%  "words_impact=mucho"),
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```
+
+Reglas que generan impacto medio/mucho
+```{r}
+inspect(
+  sort(
+    subset(words_impact_rules, subset = rhs  %pin%  "words_impact=medio" | rhs  %pin%  "words_impact=mucho"),
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```
