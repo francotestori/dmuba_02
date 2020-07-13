@@ -1,0 +1,274 @@
+---
+title: "DMUBA TP01"
+output: html_notebook
+---
+
+Carga inicial del dataframe de tweets COVID-19
+```{r}
+library(mongolite)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+library(tm, exclude = "inspect")
+library(stringr)
+library(stringi)
+library(arules)
+library(tokenizers)
+
+
+tweets_mongo_covid19 <- mongo(
+  collection = "tweets_mongo_covid19", 
+  db = "DMUBA"
+)
+```
+
+## Tweets de mayor impacto
+```{r}
+df_tweets = tweets_mongo_covid19$find(fields=
+'{
+      "retweet_status_id": 1,  
+      "retweet_user_id": 1,
+      "retweet_screen_name": 1,
+      "retweet_verified": 1,
+      "retweet_location": 1,
+      "retweet_source": 1,
+      "retweet_favorite_count": 1,
+      "retweet_retweet_count": 1,
+      "retweet_statuses_count": 1,
+      "retweet_followers_count": 1,
+      "retweet_friends_count": 1
+   
+}'
+)
+```
+
+```{r}
+View(df_tweets)
+```
+
+```{r}
+retweeted_tweets_header <- c(
+  'retweet_status_id',
+  'retweet_user_id',
+  'retweet_screen_name',
+  'retweet_verified',
+  'retweet_location',
+  'retweet_source',
+  'retweet_favorite_count',
+  'retweet_retweet_count',
+  'retweet_statuses_count',
+  'retweet_followers_count',
+  'retweet_friends_count'
+)
+
+retweeted_tweets = df_tweets[,retweeted_tweets_header]
+
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_status_id'] <- 'status_id'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_user_id'] <- 'user_id'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_screen_name'] <- 'screen_name'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_verified'] <- 'verified'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_location'] <- 'location'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_source'] <- 'source'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_favorite_count'] <- 'favorite_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_retweet_count'] <- 'retweet_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_statuses_count'] <- 'statuses_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_followers_count'] <- 'followers_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_friends_count'] <- 'friends_count'
+
+```
+
+#4)Tweets con mayor repercusiÃ³n
+```{r}
+combined_tweets = rbind(retweeted_tweets)
+View(combined_tweets)
+top_tweets_by_retweet_count=combined_tweets
+#Ordenamos por retweet_count de manera decreciente, hay mismos tw con distinto retweet_count
+top_tweets_by_retweet_count= data.frame(top_tweets_by_retweet_count %>%
+  group_by(status_id) %>%
+  arrange(-retweet_count) %>%
+  filter(row_number()==1))
+View(head(top_tweets_by_retweet_count,20))
+```
+
+```{r}
+#Discretizaciones amigos
+hist(log10(top_tweets_by_retweet_count$friends_count+1))
+top_tweets_by_retweet_count$cat_friends =discretize(log10(top_tweets_by_retweet_count$friends_count+1),method = "fixed", breaks = c(-Inf, 0.0001, 2.5, 3, Inf), labels=c("nada","pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_friends)
+```
+
+```{r}
+#Discretizaciones Followers
+hist(log10(top_tweets_by_retweet_count$followers_count+1))
+top_tweets_by_retweet_count$cat_followers =discretize(log10(top_tweets_by_retweet_count$followers_count+1),method = "fixed", breaks = c(-Inf,  3.5, 4.5, Inf), labels=c("pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_followers)
+```
+
+```{r}
+#Discretizaciones Statuses
+hist(log10(top_tweets_by_retweet_count$statuses_count+1))
+top_tweets_by_retweet_count$cat_statuses =discretize(log10(top_tweets_by_retweet_count$statuses_count+1),method = "fixed", breaks = c(-Inf, 4, 5, Inf), labels=c("pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_statuses)
+```
+
+```{r}
+#Discretizaciones Favorite
+hist(log10(top_tweets_by_retweet_count$favorite_count+0.5))
+top_tweets_by_retweet_count$cat_favorite =discretize(log10(top_tweets_by_retweet_count$favorite_count+1),method = "fixed", breaks = c(-Inf, 0.0001, 0.5, 2, Inf), labels=c("nada","pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_favorite)
+```
+
+```{r}
+#Discretizaciones RT
+hist(log10(top_tweets_by_retweet_count$retweet_count+1))
+top_tweets_by_retweet_count$cat_retweet =discretize(log10(top_tweets_by_retweet_count$retweet_count+1),method = "fixed", breaks = c(-Inf, 0.0001, 0.5, 2, Inf), labels=c("nada","pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_retweet)
+```
+
+
+```{r}
+# Se discretizan variables numéricas
+
+top_tweets_by_retweet_count$cat_friends =discretize(top_tweets_by_retweet_count$friends_count, labels=c("pocos", "medio", "muchos"))
+top_tweets_by_retweet_count$cat_favorite =discretize(log10(top_tweets_by_retweet_count$favorite_count+1),method = "fixed", breaks = c(-Inf, 0.0001, 1.5, 2, Inf), labels=c("nada","pocos", "medio", "muchos"))
+top_tweets_by_retweet_count$cat_rt =discretize(log10(top_tweets_by_retweet_count$retweet_count+1),method = "fixed", breaks = c(-Inf, 0.0001, 1.5, 2, Inf), labels=c("nada","pocos", "medio", "muchos"))
+top_tweets_by_retweet_count$cat_statuses =discretize(top_tweets_by_retweet_count$statuses_count, labels=c("pocos", "medio", "muchos"))
+top_tweets_by_retweet_count$cat_followers =discretize(top_tweets_by_retweet_count$followers_count, labels=c("pocos", "medio", "muchos"))
+top_tweets_by_retweet_count$cat_verified =  as.factor(ifelse(top_tweets_by_retweet_count$verified, "si", NA))
+View(top_tweets_by_retweet_count)
+```
+
+```{r}
+table(top_tweets_by_retweet_count$cat_friends)
+table(top_tweets_by_retweet_count$cat_statuses)
+table(top_tweets_by_retweet_count$cat_followers)
+table(top_tweets_by_retweet_count$cat_favorite)
+table(top_tweets_by_retweet_count$cat_rt)
+table(top_tweets_by_retweet_count$cat_verified)
+```
+
+
+
+```{r}
+# generación de trxs
+trans <- as(top_tweets_by_retweet_count[c("cat_friends","cat_verified","cat_statuses","cat_followers", "cat_rt")], "transactions")
+print(trans)
+
+```
+
+```{r}
+# generación de reglas: Aquellos con muchos RT
+rules = apriori(trans, parameter=list(target="rule", support=0.05, confidence=0.02), appearance = list(rhs = 'cat_rt=muchos'))
+print(rules)
+View(inspect(sort(rules, by="lift", decreasing = TRUE)[1:2]))
+```
+
+```{r}
+# generación de trxs
+trans2 <- as(top_tweets_by_retweet_count[c("cat_friends", "cat_favorite","cat_verified","cat_statuses","cat_followers")], "transactions")
+print(trans2)
+
+```
+
+```{r}
+# generación de reglas: Aquellos con muchos Favs
+rules2 = apriori(trans2, parameter=list(target="rule", support=0.01, confidence=0.02), appearance = list(rhs = 'cat_favorite=muchos'))
+print(rules2)
+View(inspect(sort(rules2, by="lift", decreasing = TRUE)[1:10]))
+```
+
+#4 Consigna, pregunta del TP pasado, independencia verified vs popularidad
+```{r}
+# generación de reglas 2- Influencia del verified
+trans <- as(top_tweets_by_retweet_count[c("cat_friends", "cat_favorite","cat_verified","cat_statuses","cat_followers", "cat_rt")], "transactions")
+rules = apriori(trans, parameter=list(target="rule", support=0.0001, confidence=0.02), appearance = list(lhs = 'cat_verified=si'))
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE))
+```
+
+#Formato tuplas tweets-item
+
+```{r}
+# Pivot de columnas que empiezan con "cat"
+df_tweets_tuples = top_tweets_by_retweet_count %>% 
+  pivot_longer(
+    cols =starts_with("cat"),
+    names_to = "feat", 
+    values_to = "val", 
+    names_prefix = "cat_",
+    values_drop_na = TRUE) %>% 
+  select("status_id", "feat", "val")
+```
+
+```{r}
+# se agrega prefijo de tipo de ítem:
+df_tweets_tuples = df_tweets_tuples %>% 
+  mutate("item" = paste0(feat,"=",val)) %>% 
+  select("status_id", "item")
+```
+
+```{r}
+length(unique(df_tweets_tuples$status_id))
+```
+
+#Hashtags
+
+```{r}
+df_ht = tweets_mongo_covid19$find(query = '{"hashtags": {"$ne": null}}', 
+                    fields = '{"status_id" : true, "hashtags" : true, "_id": false}')
+```
+
+```{r}
+length(unique(df_ht$status_id))
+```
+
+```{r}
+# formato tuplas: explota columna de hastagh
+df_ht = df_ht %>% unnest(hashtags)
+```
+
+# limpieza
+
+```{r}
+# Se quitan acentos
+df_ht$hashtags = stri_trans_general(df_ht$hashtags, "Latin-ASCII")
+# Se pasa a minúsculas
+df_ht$hashtags = tolower(df_ht$hashtags)
+# Se quita todo lo que no es alfanumérico
+df_ht$hashtags= gsub("[^a-zA-z0-9]", "", df_ht$hashtags)
+
+```
+
+```{r}
+df_ht = df_ht[-grep(x =  df_ht$hashtags, pattern = "^(covid|corona|cuarentena|virus|covid19)"),]
+```
+
+```{r}
+# se agrega prefijo de tipo de ítem hashtag:
+df_ht$item = paste0("hashtag=", df_ht$hashtags)
+df_ht = df_ht[c("status_id", "item")]
+```
+
+```{r}
+# A las transacciones con hashtags se les agregan los atributos del usuario.
+df_tuples = bind_rows(df_tweets_tuples, df_ht)
+```
+
+
+```{r}
+# reglas de asociación
+trans <- as(split(df_tuples$item, df_tuples$status_id), "transactions")
+inspect(trans[1245])
+rules = ?apriori(trans, parameter=list(target="rule", support=0.01, confidence=0.5), appearance = list(rhs %pin% "rt=") )
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE)[1:8])
+inspect(head(rules, 20))
+```
+
+```{r}
+rules = apriori(trans, parameter=list(target="rule", support=0.01, confidence=0.5))
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE)[500:540])
+inspect(head(rules, 20))
+```
