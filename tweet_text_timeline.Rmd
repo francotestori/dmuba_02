@@ -353,3 +353,100 @@ inspect(
   )
 )
 ```
+
+Ahora vamos a analizar si mis tweets utilizaron el lenguaje del día 
+Tomamos como lenguaje del día (diccionario) las "selected_words"
+```{r}
+dictionary = selected_words
+
+# se pasa a formato pares: tweet-words
+df_dictionary = df_text %>% 
+  select("status_id", "tweet_date", "words", "location", "source")  %>% 
+  unnest(words) %>%  
+  distinct() %>%
+  filter(
+    !str_detect(str_to_lower(words), str_to_lower(".*COVID.*|.*coronavirus.*|.*cuarentena*"))
+  )
+
+dates = unique(dictionary$tweet_date)
+```
+
+Para todas las fechas que figuran en mi diccionario, me fijo si el termino en el tweet (trx) 
+uso el vocabulario del día
+```{r}
+
+df_dictionary$use_date_dictionary = FALSE
+
+for (date in dates) {
+    date_dictionary = as.list(dictionary[dictionary$tweet_date == date, "words"]$words)
+    
+    df_dictionary[
+      df_dictionary$tweet_date == date & df_dictionary$words %in% date_dictionary,
+      "use_date_dictionary"
+    ]$use_date_dictionary <- TRUE
+    
+    remove(date_dictionary)
+}
+
+df_dictionary$use_date_dictionary = ifelse(df_dictionary$use_date_dictionary == FALSE, NA, "S")
+```
+
+Transformamos las sources de nuestros tweets filtrando como conocidas aquellas 
+que fueron utilizadas en mas de 5000 tweets
+```{r}
+known_sources <- df_dictionary %>%
+  group_by(source) %>%
+  count(source) %>%
+  filter(n > 5000)
+
+df_dictionary$source = ifelse(df_dictionary$source %in% as.list(known_sources$source), df_dictionary$source, NA) 
+```
+
+
+Generamos nuestras transacciones
+```{r}
+# reglas
+dictionary_transactions <- as(
+  df_dictionary[
+    c(
+    "status_id",
+    "tweet_date",
+    "words",
+    "source",
+    "use_date_dictionary"
+    )
+  ], 
+  "transactions"
+)
+
+print(dictionary_transactions)
+```
+
+Generamos nuestras reglas
+```{r}
+dictionary_rules = apriori(
+  dictionary_transactions, 
+  parameter = list(
+    target="rule", 
+    support=0.01, 
+    confidence=0.02
+  )
+)
+
+print(dictionary_rules)
+
+inspect(
+  sort(
+    dictionary_rules,
+    by="lift", 
+    decreasing = TRUE
+  )
+)
+```
+
+
+```{r}
+View(     
+)
+```
+
