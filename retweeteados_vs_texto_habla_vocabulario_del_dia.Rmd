@@ -1,0 +1,578 @@
+Carga inicial del dataframe de tweets COVID-19
+```{r}
+library(mongolite)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+library(tm, exclude = "inspect")
+library(stringr)
+library(stringi)
+library(arules)
+library(tokenizers)
+library(tidytext)
+library(wordcloud)
+
+tweets_mongo_covid19 <- mongo(
+  collection = "tweets_mongo_covid19", 
+  db = "DMUBA"
+)
+```
+
+
+## Tweets de mayor impacto
+```{r}
+df_tweets = tweets_mongo_covid19$aggregate(
+'[{"$project":{
+
+      "retweet_status_id": 1,  
+      "retweet_user_id": 1,
+      "retweet_text": 1,
+      "retweet_screen_name": 1,
+      "retweet_verified": 1,
+      "retweet_location": 1,
+      "retweet_source": 1,
+      "retweet_favorite_count": 1,
+      "retweet_retweet_count": 1,
+      "retweet_statuses_count": 1,
+      "retweet_followers_count": 1,
+      "retweet_friends_count": 1,
+      "retweet_created_at": {
+          "$cond": { 
+              "if": { 
+                  "$eq" : ["$retweet_created_at", {}] 
+              }, 
+              "then": null, 
+              "else": {
+                  "$dateToString": {"date": "$retweet_created_at"}
+              }
+          }
+      }
+
+}}]'
+)
+```
+
+```{r}
+View(df_tweets)
+```
+
+```{r}
+retweeted_tweets_header <- c(
+  'retweet_created_at',
+  'retweet_status_id',
+  'retweet_user_id',
+  'retweet_text',
+  'retweet_screen_name',
+  'retweet_verified',
+  'retweet_location',
+  'retweet_source',
+  'retweet_favorite_count',
+  'retweet_retweet_count',
+  'retweet_statuses_count',
+  'retweet_followers_count',
+  'retweet_friends_count'
+)
+
+retweeted_tweets = df_tweets[,retweeted_tweets_header]
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_created_at'] <- 'created_at'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_status_id'] <- 'status_id'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_user_id'] <- 'user_id'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_text'] <- 'text'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_screen_name'] <- 'screen_name'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_verified'] <- 'verified'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_location'] <- 'location'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_source'] <- 'source'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_favorite_count'] <- 'favorite_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_retweet_count'] <- 'retweet_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_statuses_count'] <- 'statuses_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_followers_count'] <- 'followers_count'
+names(retweeted_tweets)[names(retweeted_tweets) == 'retweet_friends_count'] <- 'friends_count'
+
+```
+
+#Combinando quoteados y retweeteados
+```{r}
+combined_tweets = rbind(retweeted_tweets)
+View(combined_tweets)
+combined_tweets['created_at_R_date'] = as.POSIXct(
+  combined_tweets$created_at, 
+  format="%Y-%m-%dT", 
+  tz="UTC"
+)
+top_tweets_by_retweet_count=combined_tweets
+#Ordenamos por retweet_count de manera decreciente, hay mismos tw con distinto retweet_count
+top_tweets_by_retweet_count= data.frame(top_tweets_by_retweet_count %>%
+  group_by(status_id) %>%
+  arrange(-retweet_count) %>%
+  filter(row_number()==1))
+View(head(top_tweets_by_retweet_count,20))
+```
+
+```{r}
+#Discretizaciones amigos
+hist(log10(top_tweets_by_retweet_count$friends_count+1))
+top_tweets_by_retweet_count$cat_friends =discretize(top_tweets_by_retweet_count$friends_count,method = "fixed", breaks = c(-Inf, 300, 1500, Inf), labels=c("pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_friends)
+```
+
+```{r}
+#Discretizaciones Followers
+hist(log10(top_tweets_by_retweet_count$followers_count+1))
+top_tweets_by_retweet_count$cat_followers =discretize(top_tweets_by_retweet_count$followers_count,method = "fixed", breaks = c(-Inf,  1500, 30000, Inf), labels=c("pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_followers)
+```
+
+```{r}
+#Discretizaciones Statuses
+hist(log10(top_tweets_by_retweet_count$statuses_count+1))
+top_tweets_by_retweet_count$cat_statuses =discretize(log10(top_tweets_by_retweet_count$statuses_count+1),method = "fixed", breaks = c(-Inf, 4, 5, Inf), labels=c("pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_statuses)
+```
+
+```{r}
+#Discretizaciones Favorite
+hist(log10(top_tweets_by_retweet_count$favorite_count+0.5))
+top_tweets_by_retweet_count$cat_favorite =discretize(log10(top_tweets_by_retweet_count$favorite_count+1),method = "fixed", breaks = c(-Inf, 0.0001, 1, 2, Inf), labels=c("nada","pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_favorite)
+```
+
+```{r}
+#Discretizaciones RT
+hist(log10(top_tweets_by_retweet_count$retweet_count+1))
+top_tweets_by_retweet_count$cat_retweet =discretize(top_tweets_by_retweet_count$retweet_count,method = "fixed", breaks = c(-Inf, 0.0001, 10, 100, Inf), labels=c("nada","pocos", "medio", "muchos"))
+table(top_tweets_by_retweet_count$cat_retweet)
+```
+
+```{r}
+#Discretizaciones Verified
+top_tweets_by_retweet_count$cat_verified =  as.factor(ifelse(top_tweets_by_retweet_count$verified, "si", NA))
+table(top_tweets_by_retweet_count$cat_verified)
+```
+
+
+#Agrupacion por pais
+```{r}
+top_tweets_by_retweet_count$location_original = top_tweets_by_retweet_count$location
+top_tweets_by_retweet_count$location <- gsub("[^[:alnum:][:blank:]?&/\\-]", "", top_tweets_by_retweet_count$location)
+top_tweets_by_retweet_count$location <- gsub("U00..", "", top_tweets_by_retweet_count$location)
+# --- limpieza de textos
+# Se quitan acentos
+top_tweets_by_retweet_count$location = stri_trans_general(top_tweets_by_retweet_count$location, "Latin-ASCII")
+# Se pasa a minusculas
+top_tweets_by_retweet_count$location = tolower(top_tweets_by_retweet_count$location)
+# Se quita puntuacion
+top_tweets_by_retweet_count$location = removePunctuation(top_tweets_by_retweet_count$location)
+# Se quitan n?meros
+top_tweets_by_retweet_count$location = removeNumbers(top_tweets_by_retweet_count$location)
+# se quitan espacios extras
+top_tweets_by_retweet_count$location =  stripWhitespace(top_tweets_by_retweet_count$location)
+# se quitan espacios al principio y final de la cadena
+top_tweets_by_retweet_count$location = str_trim(top_tweets_by_retweet_count$location)
+# sin stop words
+top_tweets_by_retweet_count$location_nosw = removeWords(top_tweets_by_retweet_count$location, stopwords("spanish"))
+top_tweets_by_retweet_count$location_nosw = removeWords(top_tweets_by_retweet_count$location, stopwords("english"))
+# # ?Qu? contiene el campo location? Podemos contar frecuencias de palabras
+# corpus = Corpus(VectorSource(enc2utf8(top_tweets_by_retweet_count$location)))
+# dtm <- TermDocumentMatrix(corpus)
+# dtm
+# #m <- as.matrix(dtm)
+# #View(m[1:20, 1:100])
+# #freq <- sort(rowSums(m), decreasing=TRUE)
+# #df_location_words <- data.frame(term = names(freq), frec=freq)
+# par(bg="grey30") # Fijamos el fondo en color gris
+# wordcloud(df_location_words$term, df_location_words$frec, col=terrain.colors(length(df_location_words$term), alpha=0.9), random.order=FALSE, rot.per=0.3 )
+# # Del listado aparecen estos paises m?s populares
+# countries_regex ="(argentina|mexico|colombia|espana|peru|venezuela|chile|el salvador|ecuador|paraguay|guatemala|uruguay|honduras|nicaragua|bolivia|brasil)"
+# # Usamos expresiones regulares para extraer el pa?s
+# top_tweets_by_retweet_count$countries = str_extract(top_tweets_by_retweet_count$location, countries_regex)
+# # cantidad de usuarios con paises encontrados: 5976
+# sum(!is.na(top_tweets_by_retweet_count$countries))
+# # cantidad relativa: 44%
+# sum(!is.na(top_tweets_by_retweet_count$countries))/ nrow(top_tweets_by_retweet_count)
+# Segundo enfoque -- integrando un dataset con paises ---
+paises <- read.csv("https://gist.githubusercontent.com/brenes/1095110/raw/c8f208b03485ba28f97c500ab7271e8bce43b9c6/paises.csv",fileEncoding="utf-8")
+paises$nombre = tolower(paises$nombre)
+paises$nombre = stri_trans_general(paises$nombre, "Latin-ASCII")
+paises$nombre = removePunctuation(paises$nombre)
+paises$nombre =  stripWhitespace(paises$nombre)
+paises$nombre = str_trim(paises$nombre)
+countries_regex_2 = paste0("(", paste0(paises$nombre, collapse = '|'), ")")
+top_tweets_by_retweet_count$countries_2 = str_extract(top_tweets_by_retweet_count$location, countries_regex_2)
+
+#cantidad de usuarios con paises encontrados: 6417
+sum(is.na(top_tweets_by_retweet_count$countries_2))
+#cantidad relativa: 48%
+sum(!is.na(top_tweets_by_retweet_count$countries_2))/ nrow(top_tweets_by_retweet_count)
+top_tweets_by_retweet_count$cat_pais=top_tweets_by_retweet_count$countries_2
+```
+
+```{r}
+source_frecuency=data.frame(table(top_tweets_by_retweet_count$source))
+source_frecuency[order(-source_frecuency$Freq),]
+names(source_frecuency)[1]="source"
+known_sources=source_frecuency[source_frecuency$Freq>0.05*nrow(top_tweets_by_retweet_count),]
+platform=known_sources[1]
+platform$cat_plataforma=platform$source
+top_tweets_by_retweet_count=left_join(top_tweets_by_retweet_count,platform, c('source'='source'))
+```
+
+---------------------
+
+
+```{r}
+#Obtengo pares status_id, fecha
+status_fecha=top_tweets_by_retweet_count[,c('status_id','created_at_R_date')]
+names(status_fecha)=c('status_id','Fecha')
+status_fecha$Fecha= as.factor(status_fecha$Fecha)
+#Armo un dataframe con pares fecha cantidad de tweets
+fecha_cantidad = data.frame(table(
+  status_fecha$Fecha))
+#Doy nombre a las columnas
+names(fecha_cantidad)=c("Fecha","Cantidad")
+#Chequeo cantidad de fechas que obtengo y cantidad de retweets
+q=400
+length(fecha_cantidad[fecha_cantidad$Cantidad>q,1])
+sum(fecha_cantidad[fecha_cantidad$Cantidad>q,2])
+#Filtro fechas
+filtro=data.frame(fecha_cantidad[fecha_cantidad$Cantidad>q,1])
+names(filtro)= 'Fecha'
+#Tuplas Status_id, fecha a considerar
+join_status_fecha= inner_join(status_fecha, filtro, by = c("Fecha" = "Fecha"))
+
+```
+
+#Formato tuplas tweets-item
+
+```{r}
+# Pivot de columnas que empiezan con "cat"
+df_tweets_tuples = top_tweets_by_retweet_count %>% 
+  pivot_longer(
+    cols =starts_with("cat"),
+    names_to = "feat", 
+    values_to = "val", 
+    names_prefix = "cat_",
+    values_drop_na = TRUE) %>% 
+  select("status_id", "feat", "val")
+```
+
+```{r}
+# se agrega prefijo de tipo de √???tem:
+df_tweets_tuples = df_tweets_tuples %>% 
+  mutate("item" = paste0(feat,"=",val)) %>% 
+  select("status_id", "item")
+```
+
+```{r}
+length(unique(df_tweets_tuples$status_id))
+```
+
+
+```{r}
+### ----- Tratamiento de Textos ------------
+df_text = top_tweets_by_retweet_count[,c("status_id","text")]
+```
+
+```{r}                                              
+# Se quitan caracteres no alfanum√©ricos (por cuestiones de errores en RStudio)
+df_text$text <- gsub("[^[:alnum:][:blank:]?&/\\-]", "", df_text$text)
+df_text$text <- gsub("U00..", "", df_text$text)
+```
+
+```{r}
+# --- limpieza de textos
+# Se quitan acentos
+df_text$text = stri_trans_general(df_text$text, "Latin-ASCII")
+# Se pasa a minusculas
+df_text$text = tolower(df_text$text)
+# Se quita puntuacion
+df_text$text = removePunctuation(df_text$text)
+# Se quitan n√∫meros
+df_text$text = removeNumbers(df_text$text)
+# se quitan espacios extras
+df_text$text =  stripWhitespace(df_text$text)
+# se quitan espacios al principio y final de la cadena
+df_text$text = str_trim(df_text$text)
+# sin stop words spanish
+df_text$text = removeWords(df_text$text, stopwords("spanish"))
+# sin stop words english
+df_text$text = removeWords(df_text$text, stopwords("english"))
+df_text$text <- gsub("https[a-z0-9]+", "", df_text$text)
+```
+
+```{r}
+# se separa el texto en t√©rminos
+df_text$words = tokenizers::tokenize_words(df_text$text, simplify = T)
+```
+
+```{r}
+# se pasa a formato pares: user-t√©rmino
+df_text = df_text %>% select("status_id", "words")  %>% unnest(words) %>%  distinct()
+```
+
+```{r}
+# Elimino los tÈrminos de b˙squeda de los hashtags
+df_text = df_text[-grep(x =  df_text$words, pattern = "^(covid|corona|cuarentena|virus)"),]
+```
+
+```{r}
+fecha_palabra= inner_join(df_text, join_status_fecha, by = c("status_id" = "status_id"))
+```
+
+```{r}
+fecha_palabra2=fecha_palabra%>%
+  count(fecha_palabra$Fecha, fecha_palabra$words, sort = TRUE)
+names(fecha_palabra2)=c('Fecha','words','n')
+```
+
+```{r}
+fecha_palabra2 <- fecha_palabra2 %>%
+  bind_tf_idf(words, Fecha, n)
+n=20
+top_it_idf=500
+head(arrange(fecha_palabra2[fecha_palabra2$n>n,],-tf_idf),top_it_idf)
+df=head(arrange(fecha_palabra2[fecha_palabra2$n>n,],-tf_idf),top_it_idf)
+df= df[,1:2]
+df[,3]=1
+vocabulario_dia= left_join(fecha_palabra, df, by= c("Fecha" = "Fecha","words"="words"))
+names(vocabulario_dia)[4]="Match"
+vocabulario_dia[is.na(vocabulario_dia$Match),"Match"]=0
+tupla=vocabulario_dia %>%
+  group_by(status_id) %>%
+  summarise(suma = sum(Match)) 
+tupla$dia=ifelse(tupla$suma>0,"si","no")
+nrow(tupla[tupla$dia=="no",1])
+# se agrega prefijo de tipo de √???tem:
+tupla$item = paste0("Vocabulario_dia=", tupla$dia)
+
+```
+
+
+```{r}
+# A las transacciones con hashtags se les agregan los atributos del usuario.
+df_tuples=tupla[,c("status_id","item")]
+df_tuples = bind_rows(df_tweets_tuples, df_tuples)
+```
+
+
+```{r}
+# reglas
+trans2 <- as(split(df_tuples$item, df_tuples$status_id), "transactions")
+print(trans2)
+#subitem=grep("^word=", itemLabels(trans2), value = TRUE)  LO CUELGA SI LE PASAS MUCHAS PALABRAS
+rules = apriori(trans2, parameter=list(target="rule", support=0.1, confidence=0.0002, minlen=2))
+#, appearance = list(rhs = 'rt=muchos')
+print(rules)
+View(inspect(sort(rules, by="lift", decreasing = TRUE)))
+inspect(head(rules, 20))
+```
+
+
+```{r}
+# generaci√≥n de reglas: Aquellos con muchos RT
+trans <- as(top_tweets_by_retweet_count[c("cat_friends", "cat_favorite","cat_verified","cat_statuses","cat_followers", "cat_rt")], "transactions")
+rules = apriori(trans, parameter=list(target="rule", support=0.01, confidence=0.02), appearance = list(rhs = 'cat_rt=muchos'))
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE))
+```
+
+```{r}
+# generaci√≥n de reglas: Aquellos con muchos Favs
+trans <- as(top_tweets_by_retweet_count[c("cat_friends", "cat_favorite","cat_verified","cat_statuses","cat_followers", "cat_rt")], "transactions")
+rules = apriori(trans, parameter=list(target="rule", support=0.01, confidence=0.02), appearance = list(rhs = 'cat_favorite=muchos'))
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE))
+```
+
+#4 Consigna, pregunta del TP pasado, independencia verified vs popularidad
+```{r}
+# generaci√≥n de reglas 2- Influencia del verified
+trans <- as(top_tweets_by_retweet_count[c("cat_friends", "cat_favorite","cat_verified","cat_statuses","cat_followers", "cat_rt")], "transactions")
+rules = apriori(trans, parameter=list(target="rule", support=0.0001, confidence=0.02), appearance = list(lhs = 'cat_verified=si'))
+print(rules)
+inspect(sort(rules, by="lift", decreasing = TRUE))
+```
+
+
+
+```{r}
+#Codigo Leo
+s=subset(rules, subset = lhs  %pin% "word=" & !(lhs  %in% "favorite=muchos"))
+
+# Buscar que el consecuente contenga items de tipo hashtag
+# (%pin% indica matching parcial sobre el string del item)
+inspect(sort(s, by = "lift", decreasing = TRUE)[1:20])
+
+# Buscar que el antecedente contenga la word nex
+inspect(subset(rules, subset = lhs  %in% "word=new"))
+
+# Buscar que el antecedente contenga la word urgente O abril
+inspect(subset(rules, subset = lhs  %in% c("word=urgente", "word=abril")))
+
+# Buscar que el antecedente contenga la word casos Y confirmados
+inspect(subset(rules, subset = lhs  %ain% c("word=casos", "word=confirmados")))
+
+# Buscar que el antecedente contenga alguna word y en el consecuente
+# la cantidad de rt discretizada
+inspect(subset(rules, subset = lhs  %pin% "word=" & rhs  %pin% "rt="))
+
+# Buscar que el antecedente contenga alguna word O
+# en el consecuente la cantidad de rt discretizada
+inspect(subset(rules, subset = lhs  %pin% "word=" | rhs  %pin% "rt="))
+
+# Buscar que el antecedente contenga alguna word y que 
+# el antecedente NO contenga la word new
+inspect(subset(rules, subset = lhs  %pin% "word=" & !(lhs  %in% "word=new")))
+
+
+# Buscar que el itemset (antecedente o consecuente) tenga una word
+inspect(subset(rules, subset = items  %pin% "word="))
+
+# Buscar que el itemset (antecedente o concecuente) tenga una word Y que el lift sea mayor a 1.2
+inspect(subset(rules, subset = items  %pin% "word=" & lift > 1.2))
+
+
+apriori(train, parameter = list(support=0.01, confidence=0.1, target = "rules", minlen=3, maxlen=10))
+```
+
+-----
+Hacemos un tratamiento de textos
+```{r}
+### ----- Codigo Fran Tratamiento de Textos ------------
+df_text = combined_tweets[,c("status_id", "created_at_R_date", "text")]
+```
+
+Limpiamos caracteres no alfanumericos
+```{r}
+# Se quitan caracteres no alfanum√??¬©ricos (por cuestiones de errores en RStudio)
+df_text$text <- gsub("[^[:alnum:][:blank:]?&/\\-]", "", df_text$text)
+df_text$text <- gsub("U00..", "", df_text$text)
+```
+
+Limpiamos los textos
+```{r}
+# Se quitan acentos
+df_text$text = stri_trans_general(df_text$text, "Latin-ASCII")
+# Se pasa a minusculas
+df_text$text = tolower(df_text$text)
+# Se quita puntuacion
+df_text$text = removePunctuation(df_text$text)
+# Se quitan n√??¬∫meros
+df_text$text = removeNumbers(df_text$text)
+# se quitan espacios extras
+df_text$text =  stripWhitespace(df_text$text)
+# se quitan espacios al principio y final de la cadena
+df_text$text = str_trim(df_text$text)
+# sin stop words
+df_text$text = removeWords(df_text$text, stopwords("spanish"))
+# sin stop words english
+df_text$text = removeWords(df_text$text, stopwords("english"))
+```
+
+Tokenizamos el texto (separamos todos los terminos)
+```{r}
+# se separa el texto en terminos
+df_text$words = tokenizers::tokenize_words(df_text$text, simplify = T)
+```
+
+Armamos un dataframe con las palabras utilizadas en cada tweet por d√?a
+```{r}
+# se pasa a formato pares: tweet-words
+df_words_with_date = df_text %>% select("status_id", "created_at_R_date", "words")  %>% unnest(words) %>%  distinct()
+```
+
+Contamos las palabras por fecha filtrando por terminologia que no queremos
+```{r}
+words_counts_by_date <- df_words_with_date %>%
+  filter(
+    !str_detect(str_to_lower(words), str_to_lower(".*COVID.*|.*coronavirus.*|.*cuarentena*"))
+  ) %>%
+  group_by(created_at_R_date, words) %>%
+  count(words)
+  
+
+total_words <- words_counts_by_date %>% 
+  group_by(words) %>% 
+  summarize(total = sum(n))
+
+words_counts_by_date <- left_join(words_counts_by_date, total_words)
+
+words_counts_by_date <- words_counts_by_date %>%
+    bind_tf_idf(words, created_at_R_date, n)
+
+words_counts_by_date = as.data.frame(
+  words_counts_by_date
+)
+
+names(words_counts_by_date)[3] = 'count'
+
+# Elimino todos los tweets sin hashtags (NA)
+words_counts_by_date = words_counts_by_date[!is.na(words_counts_by_date['words']),]
+```
+
+Aplicamos el scoring de ocurrencias de palabras por d√?a sobre el total de incidencias para determinar su peso.
+```{r}
+# Filtramos palabras
+selected_words = words_counts_by_date[words_counts_by_date$count >= 20,]
+
+# No filtramos por count
+#selected_words = words_counts_by_date
+
+selected_words = selected_words[order(selected_words$created_at_R_date, selected_words$tf_idf, decreasing = TRUE),]
+
+selected_words <-
+  selected_words %>%
+    group_by(created_at_R_date) %>%
+    top_n(10, tf_idf)
+```
+
+Ahora vamos a analizar si mis tweets utilizaron el lenguaje del d√?a 
+Tomamos como lenguaje del d√?a (diccionario) las "selected_words"
+```{r}
+dictionary = selected_words
+
+# se pasa a formato pares: tweet-words
+df_dictionary = df_text %>% 
+  select("status_id", "created_at_R_date", "words")  %>% 
+  unnest(words) %>%  
+  distinct() %>%
+  filter(
+    !str_detect(str_to_lower(words), str_to_lower(".*COVID.*|.*coronavirus.*|.*cuarentena*"))
+  )
+
+dates = unique(dictionary$created_at_R_date)
+```
+
+Para todas las fechas que figuran en mi diccionario, me fijo si el termino en el tweet (trx) 
+uso el vocabulario del d√?a
+```{r}
+
+df_dictionary$use_date_dictionary = FALSE
+
+for (date in dates) {
+    date_dictionary = as.list(dictionary[dictionary$created_at_R_date == date, "words"]$words)
+    
+    df_dictionary[
+      df_dictionary$created_at_R_date == date & df_dictionary$words %in% date_dictionary,
+      "use_date_dictionary"
+    ]$use_date_dictionary <- TRUE
+    
+    remove(date_dictionary)
+}
+
+df_dictionary$use_date_dictionary = ifelse(df_dictionary$use_date_dictionary == FALSE, NA, "S")
+df_dictionary[!is.na(df_dictionary$use_date_dictionary),]
+```
+
+
+
+
+
+
+
+
+
+
+
+----
+
