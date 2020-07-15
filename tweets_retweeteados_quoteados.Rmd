@@ -283,7 +283,7 @@ fecha_cantidad = data.frame(table(
 #Doy nombre a las columnas
 names(fecha_cantidad)=c("Fecha","Cantidad")
 #Chequeo cantidad de fechas que obtengo y cantidad de retweets
-q=400
+q=2000
 length(fecha_cantidad[fecha_cantidad$Cantidad>q,1])
 sum(fecha_cantidad[fecha_cantidad$Cantidad>q,2])
 #Filtro fechas
@@ -380,8 +380,8 @@ names(fecha_palabra2)=c('Fecha','words','n')
 ```{r}
 fecha_palabra2 <- fecha_palabra2 %>%
   bind_tf_idf(words, Fecha, n)
-n=20
-top_it_idf=500
+n=40
+top_it_idf=100
 head(arrange(fecha_palabra2[fecha_palabra2$n>n,],-tf_idf),top_it_idf)
 df=head(arrange(fecha_palabra2[fecha_palabra2$n>n,],-tf_idf),top_it_idf)
 df= df[,1:2]
@@ -406,17 +406,65 @@ df_tuples=tupla[,c("status_id","item")]
 df_tuples = bind_rows(df_tweets_tuples, df_tuples)
 ```
 
-
+# reglas
 ```{r}
 # reglas
 trans2 <- as(split(df_tuples$item, df_tuples$status_id), "transactions")
 print(trans2)
 #subitem=grep("^word=", itemLabels(trans2), value = TRUE)  LO CUELGA SI LE PASAS MUCHAS PALABRAS
-rules = apriori(trans2, parameter=list(target="rule", support=0.1, confidence=0.0002, minlen=2))
-#, appearance = list(rhs = 'rt=muchos')
+rules = apriori(trans2, parameter=list(target="rule", support=0.0093, confidence=0.0002, minlen=2, maxlen=2), appearance = list(lhs = 'plataforma=Twitter for Android'))
+#, appearance = list(rhs = 'plataforma=Twitter for Android')
 print(rules)
-View(inspect(sort(rules, by="lift", decreasing = TRUE)))
-inspect(head(rules, 20))
+View(inspect(sort(rules, by="lift", decreasing = TRUE)[1:25]))
+#View(inspect(sort(subset(rules, subset = lhs  %pin% "pais=" & rhs  %pin% "plataforma="),by= "lift", decreasing = TRUE)[1:10]))
+View(inspect(sort(subset(rules, subset = lhs  %in% "plataforma=TweetDeck"),by= "lift", decreasing = TRUE)[1:10]))
+```
+
+```{r}
+s=subset(rules, subset = !(lhs  %in% c("retweet=muchos","followers=muchos",'plataforma=Twitter for iPhone','verified=si')))
+View(inspect(sort(s, by = "lift", decreasing = TRUE)))
+
+
+
+s=subset(rules, subset = rhs  %pin% "favorite=")
+
+#Codigo Leo
+s=subset(rules, subset = rhs  %pin% "rt=" & !(lhs  %in% "favorite=muchos"))
+
+# Buscar que el consecuente contenga items de tipo hashtag
+# (%pin% indica matching parcial sobre el string del item)
+inspect(sort(s, by = "lift", decreasing = TRUE))
+
+# Buscar que el antecedente contenga la word nex
+inspect(subset(rules, subset = lhs  %in% "word=new"))
+
+# Buscar que el antecedente contenga la word urgente O abril
+inspect(subset(rules, subset = lhs  %in% c("word=urgente", "word=abril")))
+
+# Buscar que el antecedente contenga la word casos Y confirmados
+inspect(subset(rules, subset = lhs  %ain% c("word=casos", "word=confirmados")))
+
+# Buscar que el antecedente contenga alguna word y en el consecuente
+# la cantidad de rt discretizada
+
+
+# Buscar que el antecedente contenga alguna word O
+# en el consecuente la cantidad de rt discretizada
+inspect(subset(rules, subset = lhs  %pin% "word=" | rhs  %pin% "rt="))
+
+# Buscar que el antecedente contenga alguna word y que 
+# el antecedente NO contenga la word new
+inspect(subset(rules, subset = lhs  %pin% "word=" & !(lhs  %in% "word=new")))
+
+
+# Buscar que el itemset (antecedente o consecuente) tenga una word
+inspect(subset(rules, subset = items  %pin% "word="))
+
+# Buscar que el itemset (antecedente o concecuente) tenga una word Y que el lift sea mayor a 1.2
+inspect(subset(rules, subset = items  %pin% "word=" & lift > 1.2))
+
+
+apriori(train, parameter = list(support=0.01, confidence=0.1, target = "rules", minlen=3, maxlen=10))
 ```
 
 
@@ -444,6 +492,8 @@ rules = apriori(trans, parameter=list(target="rule", support=0.0001, confidence=
 print(rules)
 inspect(sort(rules, by="lift", decreasing = TRUE))
 ```
+
+
 
 
 
